@@ -2,8 +2,10 @@
 package connector
 
 import (
+	"context"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // cmdRunner abstracts exec.Command so GitHubConnector is testable without
@@ -19,7 +21,14 @@ type cmdRunner interface {
 type ExecCmdRunner struct{}
 
 func (ExecCmdRunner) Run(name string, args []string) (string, error) {
-	out, err := exec.Command(name, args...).Output()
+	// Bound the subprocess so a hung `gh` call (e.g. stuck auth prompt or
+	// unreachable network) can't make `lumo status` hang indefinitely.
+	// This is an internal timeout on the single call site rather than a
+	// context.Context parameter on the cmdRunner interface, to keep the
+	// exported interface signature unchanged.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
 	return string(out), err
 }
 

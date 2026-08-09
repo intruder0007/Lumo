@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -710,12 +711,13 @@ GitHub and SonarQube are reachable/configured.`)
 }
 
 // cmdStatus reports the current project/Git/GitHub/SonarQube state.
-// --offline skips every network call (GitHub's `gh auth status` and the
-// SonarQube HTTP check) as well as secretstore.New() — the SonarQube
-// token lookup is part of the network path, not the offline one — so
-// `lumo status --offline` never touches the network or the OS secret
-// store. Network calls are announced on stderr (not stdout) so piped or
-// parsed stdout output stays clean.
+// --offline skips every network call (GitHub's `gh auth status`, the
+// SonarQube HTTP check, and the govulncheck dependency-vulnerability
+// scan, which fetches the Go vulnerability database) as well as
+// secretstore.New() — the SonarQube token lookup is part of the network
+// path, not the offline one — so `lumo status --offline` never touches
+// the network or the OS secret store. Network calls are announced on
+// stderr (not stdout) so piped or parsed stdout output stays clean.
 func cmdStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	fs.Usage = statusUsage
@@ -744,7 +746,9 @@ func cmdStatus(args []string) {
 	fmt.Println()
 
 	fmt.Println(t.Header("Git:"))
-	if info, statErr := os.Stat(filepath.Join(cwd, ".git")); statErr == nil && info.IsDir() {
+	gitCmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+	gitCmd.Dir = cwd
+	if out, gitErr := gitCmd.Output(); gitErr == nil && strings.TrimSpace(string(out)) == "true" {
 		fmt.Println(t.Success("initialized"))
 	} else {
 		fmt.Println(t.Failure("not initialized"))
@@ -794,19 +798,27 @@ func cmdStatus(args []string) {
 
 	fmt.Println()
 	fmt.Println(t.Header("Dependency vulnerabilities (Go):"))
-	if _, statErr := os.Stat(filepath.Join(cwd, "go.mod")); statErr != nil {
-		fmt.Println(t.Dim("skipped (no go.mod in current directory)"))
-	} else if _, lookErr := exec.LookPath("go"); lookErr != nil {
-		fmt.Println(t.Dim("skipped (go toolchain not found on PATH)"))
-	} else {
-		out, err := exec.Command("go", "run", "golang.org/x/vuln/cmd/govulncheck@latest", "./...").CombinedOutput()
-		switch {
-		case err != nil && !strings.Contains(string(out), "vulnerabilities"):
-			fmt.Println(t.Dim("skipped (govulncheck unavailable: " + firstLine(string(out)) + ")"))
-		case strings.Contains(string(out), "0 vulnerabilities"):
-			fmt.Println(t.Success("no known vulnerabilities"))
-		default:
-			fmt.Println(t.Failure("vulnerabilities found — run 'go run golang.org/x/vuln/cmd/govulncheck@latest ./...' for details"))
+	switch {
+	case *offline:
+		fmt.Println(t.Dim("offline — not checked"))
+	default:
+		if _, statErr := os.Stat(filepath.Join(cwd, "go.mod")); statErr != nil {
+			fmt.Println(t.Dim("skipped (no go.mod in current directory)"))
+		} else if _, lookErr := exec.LookPath("go"); lookErr != nil {
+			fmt.Println(t.Dim("skipped (go toolchain not found on PATH)"))
+		} else {
+			fmt.Fprintln(os.Stderr, "→ network: Go vulnerability database (govulncheck)")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, "go", "run", "golang.org/x/vuln/cmd/govulncheck@latest", "./...").CombinedOutput()
+			switch {
+			case err != nil && !strings.Contains(string(out), "vulnerabilities"):
+				fmt.Println(t.Dim("skipped (govulncheck unavailable: " + firstLine(string(out)) + ")"))
+			case strings.Contains(string(out), "No vulnerabilities found"), strings.Contains(string(out), "0 vulnerabilities"):
+				fmt.Println(t.Success("no known vulnerabilities"))
+			default:
+				fmt.Println(t.Failure("vulnerabilities found — run 'go run golang.org/x/vuln/cmd/govulncheck@latest ./...' for details"))
+			}
 		}
 	}
 }
@@ -1001,10 +1013,11 @@ func cmdConfigSetSonarQubeToken() {
 }
 
 // pluginTrustKey identifies a specific plugin build for consent tracking:
-// name+version+resolved path, so a plugin binary swapped at the same
-// path (a stale/different build) or a version bump re-triggers consent —
-// see SECURITY.md's "installing a plugin is consent to run it" model and
-// spec Section 2.2.
+// name+version+resolved path, so a plugin relocated to a different path,
+// or bumped to a new version, requires consent again; swapping the
+// binary at the same path with the same declared name/version is not
+// detected by this key alone — see SECURITY.md's "installing a plugin is
+// consent to run it" model and spec Section 2.2.
 func pluginTrustKey(p registry.Plugin) string {
 	return p.Manifest.Name + "@" + p.Manifest.Version + "@" + p.EntrypointPath
 }

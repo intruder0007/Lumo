@@ -4,6 +4,7 @@ package connector
 import (
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // SonarQubeConnector checks reachability and auth against a configured
@@ -19,7 +20,9 @@ type SonarQubeConnector struct {
 
 func NewSonarQubeConnector(baseURL, token string, client *http.Client) *SonarQubeConnector {
 	if client == nil {
-		client = http.DefaultClient
+		// http.DefaultClient has no timeout, which would let lumo status
+		// hang indefinitely against an unresponsive server. Bound it.
+		client = &http.Client{Timeout: 10 * time.Second}
 	}
 	return &SonarQubeConnector{baseURL: baseURL, token: token, client: client}
 }
