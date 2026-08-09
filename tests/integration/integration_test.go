@@ -92,6 +92,7 @@ func TestEndToEndGenerateGoRestAPI(t *testing.T) {
 		"--framework", "rest-api",
 		"--capabilities", "git-init,readme,github-actions-ci",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates")+string(os.PathListSeparator)+capabilitiesDir)
@@ -186,7 +187,12 @@ func TestWizardLineFallbackGeneratesProject(t *testing.T) {
 		"git-init,readme", // capabilities
 	}, "\n") + "\n"
 
-	cmd := exec.Command(cliPath, "new")
+	// --yes only skips the post-wizard plugin-execution consent prompt
+	// (Task 8): it does not touch the interactive-vs-flags routing (that
+	// is decided by cmdNew's `interactive` bool, which never looks at
+	// -yes), so the wizard's own line-fallback Q&A above is completely
+	// unaffected — this test still proves what its doc comment says.
+	cmd := exec.Command(cliPath, "new", "--yes")
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates")+string(os.PathListSeparator)+capabilitiesDir)
 	cmd.Stdin = strings.NewReader(answers)
@@ -262,6 +268,7 @@ func TestEndToEndGenerateNodeRestAPI(t *testing.T) {
 		"--language", "node",
 		"--framework", "http-api",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates"))
@@ -315,6 +322,7 @@ func TestEndToEndGenerateTypeScriptRestAPI(t *testing.T) {
 		"--language", "typescript",
 		"--framework", "http-api",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates"))
@@ -366,6 +374,7 @@ func TestEndToEndGenerateRustRestAPI(t *testing.T) {
 		"--language", "rust",
 		"--framework", "http-api",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates"))
@@ -435,6 +444,7 @@ func TestEndToEndGenerateCppCLI(t *testing.T) {
 		"--language", "cpp",
 		"--framework", "cli",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates"))
@@ -762,6 +772,7 @@ func TestEndToEndGenerateViaEmbeddedFallback(t *testing.T) {
 		"--framework", "rest-api",
 		"--capabilities", "readme",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = envWithout(os.Environ(), "LUMO_PLUGIN_DIRS")
@@ -887,6 +898,7 @@ func TestGithubActionsCIRefusesNonGoProject(t *testing.T) {
 		"--framework", "http-api",
 		"--capabilities", "github-actions-ci",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates")+string(os.PathListSeparator)+filepath.Join(bin, "plugins", "builtin"))
