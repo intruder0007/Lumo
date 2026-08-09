@@ -1097,6 +1097,57 @@ func TestNewRejectsUnknownTheme(t *testing.T) {
 	}
 }
 
+// isolatedConfigEnv returns an environment (based on os.Environ()) with
+// the OS's per-user config-directory variable (%AppData% on Windows,
+// $XDG_CONFIG_HOME elsewhere — matching os.UserConfigDir() and
+// cli/internal/prompt/config_test.go's withTempConfigDir) redirected to
+// dir, so a subprocess's prompt.LoadConfig/SaveConfig calls never
+// read or write the real host's %AppData%\lumo\ (or ~/.config/lumo/)
+// directory during a test.
+func isolatedConfigEnv(dir string) []string {
+	env := os.Environ()
+	if runtime.GOOS == "windows" {
+		return append(env, "AppData="+dir)
+	}
+	return append(env, "XDG_CONFIG_HOME="+dir)
+}
+
+// TestStatusOfflineShowsRepoAndGitOnly builds the real lumo binary and
+// runs `lumo status --offline` in a fresh temp directory (no .git),
+// proving the Project/Git rows render and the GitHub/SonarQube rows
+// report "offline" without any network call. cmd.Env is redirected via
+// isolatedConfigEnv so the subprocess's prompt.LoadConfig call can never
+// touch the real host's Lumo config directory (see this task's
+// host-safety note: --offline still calls prompt.LoadConfig, just not
+// secretstore.New(), so the config directory still needs isolating even
+// though the secret store never gets touched on this path).
+func TestStatusOfflineShowsRepoAndGitOnly(t *testing.T) {
+	root := repoRoot(t)
+	bin := t.TempDir()
+	cliPath := filepath.Join(bin, exeName("lumo"))
+	buildBinary(t, root, "cli", cliPath)
+
+	dir := t.TempDir()
+	configDir := t.TempDir()
+	cmd := exec.Command(cliPath, "status", "--offline")
+	cmd.Dir = dir
+	cmd.Env = isolatedConfigEnv(configDir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lumo status --offline failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "Project:") {
+		t.Errorf("output missing Project section:\n%s", got)
+	}
+	if !strings.Contains(got, "not initialized") {
+		t.Errorf("output should report Git not initialized in a fresh temp dir:\n%s", got)
+	}
+	if !strings.Contains(got, "offline") {
+		t.Errorf("output should mark GitHub/SonarQube as offline:\n%s", got)
+	}
+}
+
 // TestConfigSetThemeRejectsUnknownTheme: `config set theme` persists a
 // theme, so an unknown one must be rejected before anything is written.
 func TestConfigSetThemeRejectsUnknownTheme(t *testing.T) {

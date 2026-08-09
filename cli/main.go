@@ -16,6 +16,7 @@ import (
 	"github.com/intruder0007/Lumo/cli/internal/embedded"
 	"github.com/intruder0007/Lumo/cli/internal/prompt"
 	"github.com/intruder0007/Lumo/core/config"
+	"github.com/intruder0007/Lumo/core/connector"
 	"github.com/intruder0007/Lumo/core/diag"
 	"github.com/intruder0007/Lumo/core/engine"
 	"github.com/intruder0007/Lumo/core/plugin"
@@ -60,6 +61,8 @@ func main() {
 		cmdConfig(os.Args[2:])
 	case "doctor":
 		cmdDoctor(os.Args[2:])
+	case "status":
+		cmdStatus(os.Args[2:])
 	case "version":
 		fmt.Printf("lumo version %s (%s, %s/%s)\n", version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	case "-h", "--help", "help":
@@ -695,6 +698,113 @@ func cmdDoctor(args []string) {
 	fmt.Println(t.Failure("doctor: found issues"))
 	fmt.Println(t.Dim("  hint: check plugin.json files against docs/plugins/authoring.md / docs/templates/authoring.md, or set LUMO_PLUGIN_DIRS to point at the right directories."))
 	exit(1)
+}
+
+// statusUsage prints the usage/help text for `lumo status`.
+func statusUsage() {
+	fmt.Fprintln(os.Stderr, `usage: lumo status [flags]
+
+Shows the current repo/project, whether Git is initialized, and whether
+GitHub and SonarQube are reachable/configured.`)
+}
+
+// cmdStatus reports the current project/Git/GitHub/SonarQube state.
+// --offline skips every network call (GitHub's `gh auth status` and the
+// SonarQube HTTP check) as well as secretstore.New() — the SonarQube
+// token lookup is part of the network path, not the offline one — so
+// `lumo status --offline` never touches the network or the OS secret
+// store. Network calls are announced on stderr (not stdout) so piped or
+// parsed stdout output stays clean.
+func cmdStatus(args []string) {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	fs.Usage = statusUsage
+	offline := fs.Bool("offline", false, "skip GitHub/SonarQube network checks")
+	verbose := fs.Bool("verbose", false, "print phase-by-phase connector logging to stderr")
+	fs.BoolVar(verbose, "v", false, "shorthand for -verbose")
+	fs.Parse(args)
+
+	cfg, _ := prompt.LoadConfig()
+	themeName := prompt.ResolveThemeName("", cfg.Theme)
+	t := prompt.GetTheme(themeName, os.Getenv("NO_COLOR") != "")
+
+	var logger diag.Logger = diag.NoopLogger{}
+	if *verbose {
+		logger = diag.WriterLogger{W: os.Stderr}
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	projectName := filepath.Base(cwd)
+	fmt.Println(t.Header("Project:"))
+	fmt.Println(t.Success(fmt.Sprintf("%s (%s)", projectName, cwd)))
+	fmt.Println()
+
+	fmt.Println(t.Header("Git:"))
+	if info, statErr := os.Stat(filepath.Join(cwd, ".git")); statErr == nil && info.IsDir() {
+		fmt.Println(t.Success("initialized"))
+	} else {
+		fmt.Println(t.Failure("not initialized"))
+	}
+	fmt.Println()
+
+	fmt.Println(t.Header("GitHub:"))
+	if *offline {
+		fmt.Println(t.Dim("offline — not checked"))
+	} else {
+		fmt.Fprintln(os.Stderr, "→ network: GitHub API (gh auth status)")
+		gh := connector.NewGitHubConnector(connector.ExecCmdRunner{})
+		res, err := connector.RunEngine(gh, logger)
+		printConnectorResult(t, res, err)
+	}
+	fmt.Println()
+
+	fmt.Println(t.Header("SonarQube:"))
+	switch {
+	case *offline:
+		fmt.Println(t.Dim("offline — not checked"))
+	case cfg.SonarQubeURL == "":
+		fmt.Println(t.Dim("not configured (see 'lumo config set sonarqube-url')"))
+	default:
+		store, native, storeErr := secretstore.New()
+		if storeErr != nil {
+			fmt.Println(t.Failure("error reading token: " + storeErr.Error()))
+			break
+		}
+		if !native {
+			fmt.Fprintln(os.Stderr, "warning: SonarQube token is stored in an unencrypted local file (no OS secret store available)")
+		}
+		token, found, getErr := store.Get("sonarqube-token")
+		if getErr != nil {
+			fmt.Println(t.Failure("error reading token: " + getErr.Error()))
+			break
+		}
+		if !found {
+			fmt.Println(t.Dim("not configured (see 'lumo config set sonarqube-token')"))
+			break
+		}
+		fmt.Fprintln(os.Stderr, "→ network: SonarQube ("+cfg.SonarQubeURL+"/api/system/status)")
+		sq := connector.NewSonarQubeConnector(cfg.SonarQubeURL, token, nil)
+		res, err := connector.RunEngine(sq, logger)
+		printConnectorResult(t, res, err)
+	}
+}
+
+// printConnectorResult renders a connector's phase-engine outcome: a
+// PhaseError (or any other error) as a failure line naming what went
+// wrong, otherwise the result's own Connected/Detail.
+func printConnectorResult(t prompt.Theme, res connector.Result, err error) {
+	if err != nil {
+		fmt.Println(t.Failure(err.Error()))
+		return
+	}
+	if res.Connected {
+		fmt.Println(t.Success(res.Detail))
+	} else {
+		fmt.Println(t.Failure(res.Detail))
+	}
 }
 
 func configUsage() {

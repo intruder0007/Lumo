@@ -265,6 +265,9 @@ commands:
                         secret store when available
   doctor                 run local health checks (plugin discovery/
                         validity) and report pass/fail with hints
+  status                 show current repo/project, Git, GitHub, and
+                        SonarQube connection state (run 'lumo status -h'
+                        for flags)
   version                print the CLI version, Go runtime, and platform
 
 Run 'lumo <command> -h' for flags on a specific command.
