@@ -129,6 +129,18 @@ jobs:
             fi
           done
 
+      # Catches dependency-level vulnerabilities (e.g. GO-2026-5024) that
+      # `go vet`/`go test` don't check for. Scoped to cli and core only —
+      # sdk/go, templates/*, and plugins/builtin/* are checked separately
+      # if/when they grow their own third-party dependencies; today they
+      # have none.
+      - name: Vulnerability scan (govulncheck)
+        run: |
+          for m in cli core; do
+            echo "== $m =="
+            (cd "$m" && go run golang.org/x/vuln/cmd/govulncheck@latest ./...)
+          done
+
       # make build runs the real staging pipeline (stage-embedded -> build
       # cli with the plugin set embedded via go:embed) and produces the
       # self-sufficient bin/lumo every release archive ships. The
