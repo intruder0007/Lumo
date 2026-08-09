@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -790,6 +791,24 @@ func cmdStatus(args []string) {
 		res, err := connector.RunEngine(sq, logger)
 		printConnectorResult(t, res, err)
 	}
+
+	fmt.Println()
+	fmt.Println(t.Header("Dependency vulnerabilities (Go):"))
+	if _, statErr := os.Stat(filepath.Join(cwd, "go.mod")); statErr != nil {
+		fmt.Println(t.Dim("skipped (no go.mod in current directory)"))
+	} else if _, lookErr := exec.LookPath("go"); lookErr != nil {
+		fmt.Println(t.Dim("skipped (go toolchain not found on PATH)"))
+	} else {
+		out, err := exec.Command("go", "run", "golang.org/x/vuln/cmd/govulncheck@latest", "./...").CombinedOutput()
+		switch {
+		case err != nil && !strings.Contains(string(out), "vulnerabilities"):
+			fmt.Println(t.Dim("skipped (govulncheck unavailable: " + firstLine(string(out)) + ")"))
+		case strings.Contains(string(out), "0 vulnerabilities"):
+			fmt.Println(t.Success("no known vulnerabilities"))
+		default:
+			fmt.Println(t.Failure("vulnerabilities found — run 'go run golang.org/x/vuln/cmd/govulncheck@latest ./...' for details"))
+		}
+	}
 }
 
 // printConnectorResult renders a connector's phase-engine outcome: a
@@ -805,6 +824,16 @@ func printConnectorResult(t prompt.Theme, res connector.Result, err error) {
 	} else {
 		fmt.Println(t.Failure(res.Detail))
 	}
+}
+
+// firstLine returns the text up to (not including) the first newline in
+// s, or all of s if it has no newline. Used to keep a subprocess's
+// (potentially multi-line) error output to a single summary line.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func configUsage() {

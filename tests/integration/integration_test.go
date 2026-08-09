@@ -1160,6 +1160,33 @@ func TestStatusOfflineShowsRepoAndGitOnly(t *testing.T) {
 	}
 }
 
+// TestStatusSkipsVulnRowOutsideGoProject builds the real lumo binary and
+// runs `lumo status --offline` in a fresh temp directory with no go.mod,
+// proving the "Dependency vulnerabilities (Go):" row degrades to a
+// "skipped" line instead of attempting to shell out to govulncheck.
+// cmd.Env is redirected via isolatedConfigEnv for the same host-safety
+// reason as TestStatusOfflineShowsRepoAndGitOnly above.
+func TestStatusSkipsVulnRowOutsideGoProject(t *testing.T) {
+	root := repoRoot(t)
+	bin := t.TempDir()
+	cliPath := filepath.Join(bin, exeName("lumo"))
+	buildBinary(t, root, "cli", cliPath)
+
+	dir := t.TempDir()
+	configDir := t.TempDir()
+	cmd := exec.Command(cliPath, "status", "--offline")
+	cmd.Dir = dir
+	cmd.Env = isolatedConfigEnv(configDir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lumo status --offline failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "skipped (no go.mod") {
+		t.Errorf("output should skip the vuln row outside a Go project:\n%s", got)
+	}
+}
+
 // TestConfigSetThemeRejectsUnknownTheme: `config set theme` persists a
 // theme, so an unknown one must be rejected before anything is written.
 func TestConfigSetThemeRejectsUnknownTheme(t *testing.T) {
