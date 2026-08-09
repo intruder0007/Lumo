@@ -283,6 +283,7 @@ func cmdNew(args []string) {
 		"-no-color": true, "--no-color": true,
 		"-verbose": true, "--verbose": true,
 		"-v": true, "--v": true,
+		"-yes": true, "--yes": true,
 	})
 
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
@@ -311,6 +312,7 @@ final component. -dir and a path-like project name can't be combined.`)
 	noColor := fs.Bool("no-color", false, "disable color output")
 	verbose := fs.Bool("verbose", false, "print diagnostic logging (plugin spawn/timing) to stderr")
 	fs.BoolVar(verbose, "v", false, "shorthand for -verbose")
+	yes := fs.Bool("yes", false, "skip plugin-execution confirmation prompts (implied by --answers and non-interactive runs)")
 	fs.Parse(rest)
 
 	if fs.NArg() > 0 {
@@ -459,6 +461,13 @@ final component. -dir and a path-like project name can't be combined.`)
 	}
 
 	reg := registry.New(pluginDirs()...)
+
+	nonInteractive := *yes || *answersFile != "" || !interactive
+	if err := confirmPluginTrust(reg, a, nonInteractive); err != nil {
+		prompt.ErrorScreen(os.Stdout, t, err)
+		exit(1)
+	}
+
 	host := plugin.NewHost()
 	host.Logger = logger
 	if *verbose {
@@ -850,6 +859,78 @@ func cmdConfigSetSonarQubeToken() {
 		exit(1)
 	}
 	fmt.Println("SonarQube token saved.")
+}
+
+// pluginTrustKey identifies a specific plugin build for consent tracking:
+// name+version+resolved path, so a plugin binary swapped at the same
+// path (a stale/different build) or a version bump re-triggers consent —
+// see SECURITY.md's "installing a plugin is consent to run it" model and
+// spec Section 2.2.
+func pluginTrustKey(p registry.Plugin) string {
+	return p.Manifest.Name + "@" + p.Manifest.Version + "@" + p.EntrypointPath
+}
+
+func isApproved(cfg prompt.Config, key string) bool {
+	for _, k := range cfg.ApprovedPlugins {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
+// confirmPluginTrust resolves every plugin a.ProjectType/Language/
+// Framework/Capabilities will run and, for any not already approved,
+// prompts for confirmation (skipped entirely when yes is true — the
+// existing non-interactive contract for --answers/CI runs, ADR-0007).
+// Approvals are persisted to prompt.Config.ApprovedPlugins so the same
+// plugin version+path never re-prompts.
+func confirmPluginTrust(reg *registry.Registry, a config.Answers, yes bool) error {
+	if yes {
+		return nil
+	}
+
+	var toConfirm []registry.Plugin
+	tmpl, err := reg.ResolveTemplate(a.ProjectType, a.Language, a.Framework)
+	if err != nil {
+		return err
+	}
+	toConfirm = append(toConfirm, tmpl)
+	for _, capID := range a.Capabilities {
+		capPlugin, err := reg.ResolveCapability(capID)
+		if err != nil {
+			return err
+		}
+		toConfirm = append(toConfirm, capPlugin)
+	}
+
+	cfg, err := prompt.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	changed := false
+	for _, p := range toConfirm {
+		key := pluginTrustKey(p)
+		if isApproved(cfg, key) {
+			continue
+		}
+		fmt.Printf("About to run plugin %q v%s (%s). Continue? [y/N] ", p.Manifest.Name, p.Manifest.Version, p.EntrypointPath)
+		line, _ := reader.ReadString('\n')
+		answer := strings.ToLower(strings.TrimSpace(line))
+		if answer != "y" && answer != "yes" {
+			return fmt.Errorf("declined to run plugin %q", p.Manifest.Name)
+		}
+		cfg.ApprovedPlugins = append(cfg.ApprovedPlugins, key)
+		changed = true
+	}
+	if changed {
+		if err := prompt.SaveConfig(cfg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isValidThemeName(name string) bool {

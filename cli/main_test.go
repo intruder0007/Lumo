@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/intruder0007/Lumo/core/registry"
+	sdk "github.com/intruder0007/Lumo/sdk/go/sdk"
 )
 
 func TestHasAnyPluginFalseForEmptyOrMissingDirs(t *testing.T) {
@@ -140,6 +143,18 @@ func TestResolveTargetPathKeepsBadNameForValidation(t *testing.T) {
 	}
 	if name != "2bad" {
 		t.Fatalf("expected name 2bad, got %q", name)
+	}
+}
+
+func TestPluginTrustKeyIncludesNameVersionAndPath(t *testing.T) {
+	p := registry.Plugin{
+		Manifest:       sdk.Manifest{Name: "git-init", Version: "1.0.0"},
+		EntrypointPath: "/plugins/git-init/git-init",
+	}
+	got := pluginTrustKey(p)
+	want := "git-init@1.0.0@/plugins/git-init/git-init"
+	if got != want {
+		t.Errorf("pluginTrustKey = %q, want %q", got, want)
 	}
 }
 
