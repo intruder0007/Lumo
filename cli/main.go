@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,6 +20,7 @@ import (
 	"github.com/intruder0007/Lumo/core/engine"
 	"github.com/intruder0007/Lumo/core/plugin"
 	"github.com/intruder0007/Lumo/core/registry"
+	"github.com/intruder0007/Lumo/core/secretstore"
 	sdk "github.com/intruder0007/Lumo/sdk/go/sdk"
 )
 
@@ -689,7 +692,10 @@ func configUsage() {
 	fmt.Fprintln(os.Stderr, `usage: lumo config get theme
        lumo config set theme <default|minimal>
        lumo config get projects-dir
-       lumo config set projects-dir <path>`)
+       lumo config set projects-dir <path>
+       lumo config get sonarqube-url
+       lumo config set sonarqube-url <url>
+       lumo config set sonarqube-token   (interactive prompt; never accepts the token as an argument)`)
 }
 
 func cmdConfig(args []string) {
@@ -711,6 +717,18 @@ func cmdConfig(args []string) {
 		} else {
 			cmdConfigSetProjectsDir(args[2:])
 		}
+	case "sonarqube-url":
+		if action == "get" {
+			cmdConfigGetSonarQubeURL()
+		} else {
+			cmdConfigSetSonarQubeURL(args[2:])
+		}
+	case "sonarqube-token":
+		if action == "get" {
+			fmt.Fprintln(os.Stderr, "error: sonarqube-token cannot be read back (write-only; use 'lumo status' to check it's configured)")
+			exit(2)
+		}
+		cmdConfigSetSonarQubeToken()
 	default:
 		configUsage()
 		exit(1)
@@ -772,6 +790,66 @@ func cmdConfigSetProjectsDir(rest []string) {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		exit(1)
 	}
+}
+
+func cmdConfigGetSonarQubeURL() {
+	cfg, err := prompt.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	fmt.Println(cfg.SonarQubeURL)
+}
+
+func cmdConfigSetSonarQubeURL(rest []string) {
+	if len(rest) < 1 || rest[0] == "" {
+		configUsage()
+		exit(1)
+	}
+	cfg, err := prompt.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	cfg.SonarQubeURL = rest[0]
+	if err := prompt.SaveConfig(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+}
+
+// cmdConfigSetSonarQubeToken reads the token interactively (never as a
+// CLI argument, to avoid shell-history/process-list leakage — spec
+// Section 2.1) and stores it via secretstore, warning if the OS has no
+// native secret store reachable and Lumo is falling back to an
+// unencrypted local file.
+func cmdConfigSetSonarQubeToken() {
+	fmt.Print("SonarQube token: ")
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	token := strings.TrimSpace(line)
+	if token == "" {
+		fmt.Fprintln(os.Stderr, "error: token cannot be empty")
+		exit(1)
+	}
+
+	store, native, err := secretstore.New()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	if !native {
+		fmt.Fprintln(os.Stderr, "warning: no OS secret store available — the token will be stored in a local file, unencrypted at rest")
+	}
+	if err := store.Set("sonarqube-token", token); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	fmt.Println("SonarQube token saved.")
 }
 
 func isValidThemeName(name string) bool {

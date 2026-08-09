@@ -256,6 +256,13 @@ commands:
   config set theme <name>
                         persist a theme (default|minimal) for future
                         interactive runs
+  config get/set sonarqube-url <url>
+                        configure the SonarQube server 'lumo status'
+                        checks (self-hosted or SonarCloud)
+  config set sonarqube-token
+                        interactively set the SonarQube token (never
+                        accepted as an argument); stored via the OS
+                        secret store when available
   doctor                 run local health checks (plugin discovery/
                         validity) and report pass/fail with hints
   version                print the CLI version, Go runtime, and platform
