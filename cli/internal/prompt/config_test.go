@@ -47,3 +47,37 @@ func TestConfigRoundTrip(t *testing.T) {
 		t.Errorf("LoadConfig after SaveConfig(DefaultProjectsDir): got %q, want %q", got.DefaultProjectsDir, want)
 	}
 }
+
+func TestConfigRoundTripSonarQubeAndApprovedPlugins(t *testing.T) {
+	withTempConfigDir(t)
+
+	got, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig on a missing file should not error, got: %v", err)
+	}
+	if got.SonarQubeURL != "" {
+		t.Errorf("LoadConfig with no saved file: got SonarQubeURL=%q, want empty", got.SonarQubeURL)
+	}
+	if len(got.ApprovedPlugins) != 0 {
+		t.Errorf("LoadConfig with no saved file: got ApprovedPlugins=%v, want empty", got.ApprovedPlugins)
+	}
+
+	cfg := Config{
+		SonarQubeURL:    "https://sonar.example.com",
+		ApprovedPlugins: []string{"git-init@1.0.0@/path/to/git-init"},
+	}
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	got, err = LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig after save: %v", err)
+	}
+	if got.SonarQubeURL != cfg.SonarQubeURL {
+		t.Errorf("LoadConfig after SaveConfig: got SonarQubeURL=%q, want %q", got.SonarQubeURL, cfg.SonarQubeURL)
+	}
+	if len(got.ApprovedPlugins) != 1 || got.ApprovedPlugins[0] != cfg.ApprovedPlugins[0] {
+		t.Errorf("LoadConfig after SaveConfig: got ApprovedPlugins=%v, want %v", got.ApprovedPlugins, cfg.ApprovedPlugins)
+	}
+}

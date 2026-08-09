@@ -18,6 +18,15 @@ type Config struct {
 	// pre-fill on the next run (never silently applied without asking;
 	// see wizard.go's stepLocation).
 	DefaultProjectsDir string `json:"defaultProjectsDir,omitempty"`
+	// SonarQubeURL is the configured SonarQube (self-hosted or
+	// SonarCloud) server to check in `lumo status`. The auth token is
+	// never stored here — see core/secretstore, keyed by "sonarqube-token".
+	SonarQubeURL string `json:"sonarQubeURL,omitempty"`
+	// ApprovedPlugins records plugins the user has already consented to
+	// run, as "name@version@entrypointPath" entries, so `lumo new`/`lumo
+	// plugins validate` only prompts once per plugin version+location
+	// (see confirmPluginTrust in main.go).
+	ApprovedPlugins []string `json:"approvedPlugins,omitempty"`
 }
 
 // configPath returns the path to the CLI's config file, using the OS's
