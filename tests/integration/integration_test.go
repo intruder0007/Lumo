@@ -1162,8 +1162,11 @@ func TestStatusOfflineShowsRepoAndGitOnly(t *testing.T) {
 
 // TestStatusSkipsVulnRowOutsideGoProject builds the real lumo binary and
 // runs `lumo status --offline` in a fresh temp directory with no go.mod,
-// proving the "Dependency vulnerabilities (Go):" row degrades to a
-// "skipped" line instead of attempting to shell out to govulncheck.
+// proving the "Dependency vulnerabilities (Go):" row reports offline
+// instead of attempting to shell out to govulncheck. --offline gates the
+// whole vuln row up front (matching the Git/GitHub/SonarQube rows), so it
+// reports "offline — not checked" regardless of whether a go.mod is
+// present — the go.mod check never even runs in this path.
 // cmd.Env is redirected via isolatedConfigEnv for the same host-safety
 // reason as TestStatusOfflineShowsRepoAndGitOnly above.
 func TestStatusSkipsVulnRowOutsideGoProject(t *testing.T) {
@@ -1182,8 +1185,8 @@ func TestStatusSkipsVulnRowOutsideGoProject(t *testing.T) {
 		t.Fatalf("lumo status --offline failed: %v\n%s", err, out)
 	}
 	got := string(out)
-	if !strings.Contains(got, "skipped (no go.mod") {
-		t.Errorf("output should skip the vuln row outside a Go project:\n%s", got)
+	if !strings.Contains(got, "offline — not checked") {
+		t.Errorf("output should report offline for the vuln row when --offline is set, regardless of go.mod presence:\n%s", got)
 	}
 }
 
