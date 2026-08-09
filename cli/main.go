@@ -462,7 +462,7 @@ final component. -dir and a path-like project name can't be combined.`)
 
 	reg := registry.New(pluginDirs()...)
 
-	nonInteractive := *yes || *answersFile != "" || !interactive
+	nonInteractive := *yes || *answersFile != ""
 	if err := confirmPluginTrust(reg, a, nonInteractive); err != nil {
 		prompt.ErrorScreen(os.Stdout, t, err)
 		exit(1)
