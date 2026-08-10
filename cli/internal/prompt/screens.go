@@ -236,39 +236,51 @@ func isPluginErr(err error) bool {
 		errors.As(err, &identityErr) || errors.As(err, &timeoutErr)
 }
 
-// HelpText is the top-level `lumo`/`lumo help` output.
-const HelpText = `usage: lumo <command> [flags]
-
-Running lumo with no arguments starts the interactive wizard
-(the same as 'lumo new').
-
-commands:
-  new [project-name]   generate a new project (interactive wizard if no
-                        flags/answers given; run 'lumo new -h' for
-                        non-interactive flags)
-  plugins list          list discovered template and capability plugins
-  plugins validate <dir>
-                        check a plugin directory before shipping it:
-                        manifest validity + binary identity/protocol
-                        handshake (run 'lumo plugins validate -h'
-                        for details)
-  config get theme      print the persisted theme (empty if unset)
-  config set theme <name>
-                        persist a theme (default|minimal) for future
-                        interactive runs
-  config get/set sonarqube-url <url>
-                        configure the SonarQube server 'lumo status'
-                        checks (self-hosted or SonarCloud)
-  config set sonarqube-token
-                        interactively set the SonarQube token (never
-                        accepted as an argument); stored via the OS
-                        secret store when available
-  doctor                 run local health checks (plugin discovery/
-                        validity) and report pass/fail with hints
-  status                 show current repo/project, Git, GitHub, and
-                        SonarQube connection state (run 'lumo status -h'
-                        for flags)
-  version                print the CLI version, Go runtime, and platform
-
-Run 'lumo <command> -h' for flags on a specific command.
-Pass -verbose (or -v) to 'lumo new' for diagnostic logging on stderr.`
+// HelpScreen renders the top-level command reference (S11 Help,
+// design-system O-06: M-01 Header, A-04 Divider) — themed via the
+// component system instead of a bare unstyled string, so `lumo help`/
+// `lumo -h` (the first thing most users see) carries Lumo's identity
+// rather than reading as a generic Go CLI's flag dump. Wording matches
+// the previous HelpText constant, plus the sonarqube-url/-token and
+// status entries added to HelpText after this screen was written.
+func HelpScreen(t Theme) []string {
+	return []string{
+		t.Header("usage: lumo <command> [flags]"),
+		"",
+		t.Dim("Running lumo with no arguments starts the interactive wizard"),
+		t.Dim("(the same as 'lumo new')."),
+		"",
+		t.Header("commands:"),
+		"  new [project-name]   generate a new project (interactive wizard if no",
+		"                        flags/answers given; run 'lumo new -h' for",
+		"                        non-interactive flags)",
+		"  plugins list          list discovered template and capability plugins",
+		"  plugins validate <dir>",
+		"                        check a plugin directory before shipping it:",
+		"                        manifest validity + binary identity/protocol",
+		"                        handshake (run 'lumo plugins validate -h'",
+		"                        for details)",
+		"  config get theme      print the persisted theme (empty if unset)",
+		"  config set theme <name>",
+		"                        persist a theme (default|minimal) for future",
+		"                        interactive runs",
+		"  config get/set sonarqube-url <url>",
+		"                        configure the SonarQube server 'lumo status'",
+		"                        checks (self-hosted or SonarCloud)",
+		"  config set sonarqube-token",
+		"                        interactively set the SonarQube token (never",
+		"                        accepted as an argument); stored via the OS",
+		"                        secret store when available",
+		"  doctor                 run local health checks (plugin discovery/",
+		"                        validity) and report pass/fail with hints",
+		"  status                 show current repo/project, Git, GitHub, and",
+		"                        SonarQube connection state (run 'lumo status -h'",
+		"                        for flags)",
+		"  version                print the CLI version, Go runtime, and platform",
+		"",
+		DividerLine(t, 74),
+		"",
+		t.Dim("Run 'lumo <command> -h' for flags on a specific command."),
+		t.Dim("Pass -verbose (or -v) to 'lumo new' for diagnostic logging on stderr."),
+	}
+}

@@ -68,11 +68,30 @@ func main() {
 	case "version":
 		fmt.Printf("lumo version %s (%s, %s/%s)\n", version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	case "-h", "--help", "help":
-		fmt.Println(prompt.HelpText)
+		for _, l := range prompt.HelpScreen(resolveHelpTheme()) {
+			fmt.Println(l)
+		}
 	default:
-		fmt.Fprintln(os.Stderr, prompt.HelpText)
-		exit(1)
+		for _, l := range prompt.HelpScreen(resolveHelpTheme()) {
+			fmt.Fprintln(os.Stderr, l)
+		}
+		// S11: an unknown command is a usage error, not a runtime one —
+		// exit 2, matching every other "you asked for something that
+		// can't be resolved before any work starts" case (e.g. --answers
+		// combined with a positional).
+		exit(2)
 	}
+}
+
+// resolveHelpTheme resolves the theme for a static help/usage screen
+// printed before any command-specific flags (like --theme) are even
+// parsed: LUMO_THEME > persisted config > default, same precedence
+// every other non-interactive path uses, with NO_COLOR/--no-color
+// unavailable at this point falling back to just NO_COLOR.
+func resolveHelpTheme() prompt.Theme {
+	cfg, _ := prompt.LoadConfig()
+	name := prompt.ResolveThemeName("", cfg.Theme)
+	return prompt.GetTheme(name, os.Getenv("NO_COLOR") != "")
 }
 
 // exit terminates with the given code after restoring the terminal title
@@ -293,19 +312,37 @@ func cmdNew(args []string) {
 
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `usage: lumo new [project-name-or-path] [flags]
-
-Generates a new project. With no flags and no --answers, runs the
-interactive wizard (which always asks where to generate — see -dir
-below for the non-interactive equivalent). Flags below make it
-non-interactive.
-
-The positional argument may be a bare project name (generated in the
-current directory, unless -dir is set) or a target path — relative
-(./my-app, ../x/app), absolute (/home/me/app, C:\code\app), or
-~-prefixed (~/code/app). The project name is derived from the path's
-final component. -dir and a path-like project name can't be combined.`)
-		fs.PrintDefaults()
+		t := resolveHelpTheme()
+		fmt.Fprintln(os.Stderr, t.Header("usage: lumo new [project-name-or-path] [flags]"))
+		fmt.Fprintln(os.Stderr)
+		for _, l := range []string{
+			"Generates a new project. With no flags and no --answers, runs the",
+			"interactive wizard (which always asks where to generate — see -dir",
+			"below for the non-interactive equivalent). Flags below make it",
+			"non-interactive.",
+			"",
+			"The positional argument may be a bare project name (generated in the",
+			"current directory, unless -dir is set) or a target path — relative",
+			"(./my-app, ../x/app), absolute (/home/me/app, C:\\code\\app), or",
+			"~-prefixed (~/code/app). The project name is derived from the path's",
+			"final component. -dir and a path-like project name can't be combined.",
+		} {
+			if l == "" {
+				fmt.Fprintln(os.Stderr)
+			} else {
+				fmt.Fprintln(os.Stderr, t.Dim(l))
+			}
+		}
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, t.Header("flags:"))
+		// Not fs.PrintDefaults(): that emits Go's default flag dump
+		// (single-dash, no color) — this walks the same *flag.FlagSet
+		// but renders each entry themed, matching every other screen
+		// in the tool instead of reading as generic Go CLI output.
+		fs.VisitAll(func(f *flag.Flag) {
+			fmt.Fprintf(os.Stderr, "  %s\n", t.Accent("-"+f.Name))
+			fmt.Fprintf(os.Stderr, "      %s\n", t.Dim(f.Usage))
+		})
 	}
 	theme := fs.String("theme", "", "CLI theme: default or minimal")
 	projectType := fs.String("project-type", "", "project type, e.g. backend-service")
