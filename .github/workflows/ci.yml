@@ -14,7 +14,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.25"
 
       # tests/integration's TestEndToEndGenerateNodeRestAPI/
       # TypeScriptRestAPI need a real node/npm on PATH — explicit rather
@@ -127,6 +127,18 @@ jobs:
               echo "== $m =="
               (cd "$m" && go test ./...)
             fi
+          done
+
+      # Catches dependency-level vulnerabilities (e.g. GO-2026-5024) that
+      # `go vet`/`go test` don't check for. Scoped to cli and core only —
+      # sdk/go, templates/*, and plugins/builtin/* are checked separately
+      # if/when they grow their own third-party dependencies; today they
+      # have none.
+      - name: Vulnerability scan (govulncheck)
+        run: |
+          for m in cli core; do
+            echo "== $m =="
+            (cd "$m" && go run golang.org/x/vuln/cmd/govulncheck@latest ./...)
           done
 
       # make build runs the real staging pipeline (stage-embedded -> build

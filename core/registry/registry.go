@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	sdk "github.com/intruder0007/Lumo/sdk/go/sdk"
 )
@@ -55,8 +56,18 @@ func (e *CapabilityNotFoundError) Error() string {
 }
 
 // Registry discovers plugins under a fixed set of local directories.
+// The scan result is cached after the first call (see discover) — a
+// Registry represents one point-in-time view of dirs, matching how
+// every call site uses it: constructed fresh right before a single
+// command's plugin resolution, never expected to observe filesystem
+// changes mid-command.
 type Registry struct {
 	dirs []string
+
+	scanOnce    sync.Once
+	scanPlugins []Plugin
+	scanIssues  []DiscoveryIssue
+	scanErr     error
 }
 
 // New returns a Registry that scans the given directories (each
@@ -80,18 +91,30 @@ func (r *Registry) DiscoverWithIssues() ([]Plugin, []DiscoveryIssue, error) {
 	return r.discover()
 }
 
+// discover scans r.dirs exactly once per Registry instance and caches
+// the result (sync.Once, so it's also safe if ever called concurrently)
+// — ResolveTemplate and ResolveCapability each call this, and a single
+// `lumo new` run with N selected capabilities previously re-scanned
+// every configured plugin directory and re-parsed every plugin.json
+// N+1 times over (once for the template, once per capability) for
+// identical results each time.
 func (r *Registry) discover() ([]Plugin, []DiscoveryIssue, error) {
-	var found []Plugin
-	var issues []DiscoveryIssue
-	for _, dir := range r.dirs {
-		dirFound, dirIssues, err := scanDir(dir)
-		if err != nil {
-			return nil, nil, err
+	r.scanOnce.Do(func() {
+		var found []Plugin
+		var issues []DiscoveryIssue
+		for _, dir := range r.dirs {
+			dirFound, dirIssues, err := scanDir(dir)
+			if err != nil {
+				r.scanErr = err
+				return
+			}
+			found = append(found, dirFound...)
+			issues = append(issues, dirIssues...)
 		}
-		found = append(found, dirFound...)
-		issues = append(issues, dirIssues...)
-	}
-	return found, issues, nil
+		r.scanPlugins = found
+		r.scanIssues = issues
+	})
+	return r.scanPlugins, r.scanIssues, r.scanErr
 }
 
 // scanDir checks each immediate subdirectory of dir for a plugin.json. A

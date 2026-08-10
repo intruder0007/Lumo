@@ -240,8 +240,9 @@ func isPluginErr(err error) bool {
 // design-system O-06: M-01 Header, A-04 Divider) — themed via the
 // component system instead of a bare unstyled string, so `lumo help`/
 // `lumo -h` (the first thing most users see) carries Lumo's identity
-// rather than reading as a generic Go CLI's flag dump. Wording is
-// unchanged from the previous HelpText constant.
+// rather than reading as a generic Go CLI's flag dump. Wording matches
+// the previous HelpText constant, plus the sonarqube-url/-token and
+// status entries added to HelpText after this screen was written.
 func HelpScreen(t Theme) []string {
 	return []string{
 		t.Header("usage: lumo <command> [flags]"),
@@ -263,8 +264,18 @@ func HelpScreen(t Theme) []string {
 		"  config set theme <name>",
 		"                        persist a theme (default|minimal) for future",
 		"                        interactive runs",
+		"  config get/set sonarqube-url <url>",
+		"                        configure the SonarQube server 'lumo status'",
+		"                        checks (self-hosted or SonarCloud)",
+		"  config set sonarqube-token",
+		"                        interactively set the SonarQube token (never",
+		"                        accepted as an argument); stored via the OS",
+		"                        secret store when available",
 		"  doctor                 run local health checks (plugin discovery/",
 		"                        validity) and report pass/fail with hints",
+		"  status                 show current repo/project, Git, GitHub, and",
+		"                        SonarQube connection state (run 'lumo status -h'",
+		"                        for flags)",
 		"  version                print the CLI version, Go runtime, and platform",
 		"",
 		DividerLine(t, 74),

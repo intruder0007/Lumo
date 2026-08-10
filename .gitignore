@@ -45,3 +45,8 @@ Thumbs.db
 project-report.md   
 engineering-report.md 
 engineering-report-npm.md
+
+# folder for local development of the CLI, not to be added to the repo
+/.opencode/
+/.cursor/
+/.windsurf/

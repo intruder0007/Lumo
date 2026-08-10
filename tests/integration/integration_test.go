@@ -92,6 +92,7 @@ func TestEndToEndGenerateGoRestAPI(t *testing.T) {
 		"--framework", "rest-api",
 		"--capabilities", "git-init,readme,github-actions-ci",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates")+string(os.PathListSeparator)+capabilitiesDir)
@@ -186,7 +187,12 @@ func TestWizardLineFallbackGeneratesProject(t *testing.T) {
 		"git-init,readme", // capabilities
 	}, "\n") + "\n"
 
-	cmd := exec.Command(cliPath, "new")
+	// --yes only skips the post-wizard plugin-execution consent prompt
+	// (Task 8): it does not touch the interactive-vs-flags routing (that
+	// is decided by cmdNew's `interactive` bool, which never looks at
+	// -yes), so the wizard's own line-fallback Q&A above is completely
+	// unaffected — this test still proves what its doc comment says.
+	cmd := exec.Command(cliPath, "new", "--yes")
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates")+string(os.PathListSeparator)+capabilitiesDir)
 	cmd.Stdin = strings.NewReader(answers)
@@ -262,6 +268,7 @@ func TestEndToEndGenerateNodeRestAPI(t *testing.T) {
 		"--language", "node",
 		"--framework", "http-api",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates"))
@@ -315,6 +322,7 @@ func TestEndToEndGenerateTypeScriptRestAPI(t *testing.T) {
 		"--language", "typescript",
 		"--framework", "http-api",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates"))
@@ -366,6 +374,7 @@ func TestEndToEndGenerateRustRestAPI(t *testing.T) {
 		"--language", "rust",
 		"--framework", "http-api",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates"))
@@ -435,6 +444,7 @@ func TestEndToEndGenerateCppCLI(t *testing.T) {
 		"--language", "cpp",
 		"--framework", "cli",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates"))
@@ -762,6 +772,7 @@ func TestEndToEndGenerateViaEmbeddedFallback(t *testing.T) {
 		"--framework", "rest-api",
 		"--capabilities", "readme",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = envWithout(os.Environ(), "LUMO_PLUGIN_DIRS")
@@ -887,6 +898,7 @@ func TestGithubActionsCIRefusesNonGoProject(t *testing.T) {
 		"--framework", "http-api",
 		"--capabilities", "github-actions-ci",
 		"--theme", "minimal",
+		"--yes",
 	)
 	cmd.Dir = genParent
 	cmd.Env = append(os.Environ(), "LUMO_PLUGIN_DIRS="+filepath.Join(bin, "templates")+string(os.PathListSeparator)+filepath.Join(bin, "plugins", "builtin"))
@@ -1094,6 +1106,87 @@ func TestNewRejectsUnknownTheme(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "unknown theme") {
 		t.Errorf("error should mention the unknown theme, got:\n%s", out)
+	}
+}
+
+// isolatedConfigEnv returns an environment (based on os.Environ()) with
+// the OS's per-user config-directory variable (%AppData% on Windows,
+// $XDG_CONFIG_HOME elsewhere — matching os.UserConfigDir() and
+// cli/internal/prompt/config_test.go's withTempConfigDir) redirected to
+// dir, so a subprocess's prompt.LoadConfig/SaveConfig calls never
+// read or write the real host's %AppData%\lumo\ (or ~/.config/lumo/)
+// directory during a test.
+func isolatedConfigEnv(dir string) []string {
+	env := os.Environ()
+	if runtime.GOOS == "windows" {
+		return append(env, "AppData="+dir)
+	}
+	return append(env, "XDG_CONFIG_HOME="+dir)
+}
+
+// TestStatusOfflineShowsRepoAndGitOnly builds the real lumo binary and
+// runs `lumo status --offline` in a fresh temp directory (no .git),
+// proving the Project/Git rows render and the GitHub/SonarQube rows
+// report "offline" without any network call. cmd.Env is redirected via
+// isolatedConfigEnv so the subprocess's prompt.LoadConfig call can never
+// touch the real host's Lumo config directory (see this task's
+// host-safety note: --offline still calls prompt.LoadConfig, just not
+// secretstore.New(), so the config directory still needs isolating even
+// though the secret store never gets touched on this path).
+func TestStatusOfflineShowsRepoAndGitOnly(t *testing.T) {
+	root := repoRoot(t)
+	bin := t.TempDir()
+	cliPath := filepath.Join(bin, exeName("lumo"))
+	buildBinary(t, root, "cli", cliPath)
+
+	dir := t.TempDir()
+	configDir := t.TempDir()
+	cmd := exec.Command(cliPath, "status", "--offline")
+	cmd.Dir = dir
+	cmd.Env = isolatedConfigEnv(configDir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lumo status --offline failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "Project:") {
+		t.Errorf("output missing Project section:\n%s", got)
+	}
+	if !strings.Contains(got, "not initialized") {
+		t.Errorf("output should report Git not initialized in a fresh temp dir:\n%s", got)
+	}
+	if !strings.Contains(got, "offline") {
+		t.Errorf("output should mark GitHub/SonarQube as offline:\n%s", got)
+	}
+}
+
+// TestStatusSkipsVulnRowOutsideGoProject builds the real lumo binary and
+// runs `lumo status --offline` in a fresh temp directory with no go.mod,
+// proving the "Dependency vulnerabilities (Go):" row reports offline
+// instead of attempting to shell out to govulncheck. --offline gates the
+// whole vuln row up front (matching the Git/GitHub/SonarQube rows), so it
+// reports "offline — not checked" regardless of whether a go.mod is
+// present — the go.mod check never even runs in this path.
+// cmd.Env is redirected via isolatedConfigEnv for the same host-safety
+// reason as TestStatusOfflineShowsRepoAndGitOnly above.
+func TestStatusSkipsVulnRowOutsideGoProject(t *testing.T) {
+	root := repoRoot(t)
+	bin := t.TempDir()
+	cliPath := filepath.Join(bin, exeName("lumo"))
+	buildBinary(t, root, "cli", cliPath)
+
+	dir := t.TempDir()
+	configDir := t.TempDir()
+	cmd := exec.Command(cliPath, "status", "--offline")
+	cmd.Dir = dir
+	cmd.Env = isolatedConfigEnv(configDir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lumo status --offline failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "offline — not checked") {
+		t.Errorf("output should report offline for the vuln row when --offline is set, regardless of go.mod presence:\n%s", got)
 	}
 }
 

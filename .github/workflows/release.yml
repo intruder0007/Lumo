@@ -28,7 +28,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.25"
 
       - name: Ensure zip is available
         run: command -v zip >/dev/null || sudo apt-get update && sudo apt-get install -y zip

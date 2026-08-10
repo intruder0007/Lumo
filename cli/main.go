@@ -3,9 +3,13 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -14,10 +18,12 @@ import (
 	"github.com/intruder0007/Lumo/cli/internal/embedded"
 	"github.com/intruder0007/Lumo/cli/internal/prompt"
 	"github.com/intruder0007/Lumo/core/config"
+	"github.com/intruder0007/Lumo/core/connector"
 	"github.com/intruder0007/Lumo/core/diag"
 	"github.com/intruder0007/Lumo/core/engine"
 	"github.com/intruder0007/Lumo/core/plugin"
 	"github.com/intruder0007/Lumo/core/registry"
+	"github.com/intruder0007/Lumo/core/secretstore"
 	sdk "github.com/intruder0007/Lumo/sdk/go/sdk"
 )
 
@@ -57,6 +63,8 @@ func main() {
 		cmdConfig(os.Args[2:])
 	case "doctor":
 		cmdDoctor(os.Args[2:])
+	case "status":
+		cmdStatus(os.Args[2:])
 	case "version":
 		fmt.Printf("lumo version %s (%s, %s/%s)\n", version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	case "-h", "--help", "help":
@@ -299,6 +307,7 @@ func cmdNew(args []string) {
 		"-no-color": true, "--no-color": true,
 		"-verbose": true, "--verbose": true,
 		"-v": true, "--v": true,
+		"-yes": true, "--yes": true,
 	})
 
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
@@ -345,6 +354,7 @@ func cmdNew(args []string) {
 	noColor := fs.Bool("no-color", false, "disable color output")
 	verbose := fs.Bool("verbose", false, "print diagnostic logging (plugin spawn/timing) to stderr")
 	fs.BoolVar(verbose, "v", false, "shorthand for -verbose")
+	yes := fs.Bool("yes", false, "skip plugin-execution confirmation prompts (implied by --answers and non-interactive runs)")
 	fs.Parse(rest)
 
 	if fs.NArg() > 0 {
@@ -493,6 +503,13 @@ func cmdNew(args []string) {
 	}
 
 	reg := registry.New(pluginDirs()...)
+
+	nonInteractive := *yes || *answersFile != ""
+	if err := confirmPluginTrust(reg, a, nonInteractive); err != nil {
+		prompt.ErrorScreen(os.Stdout, t, err)
+		exit(1)
+	}
+
 	host := plugin.NewHost()
 	host.Logger = logger
 	if *verbose {
@@ -646,7 +663,7 @@ func printEmbeddedStatus(t prompt.Theme, dirs []string) {
 		fmt.Println(t.Dim("  no plugin assets embedded in this binary (a dev build without `make build`'s staging step)"))
 		return
 	}
-	fmt.Println(t.Success("  plugin assets are embedded in this binary"))
+	fmt.Println(t.Success("plugin assets are embedded in this binary"))
 
 	cacheDir, err := embeddedCacheDir()
 	if err != nil || len(dirs) < 2 {
@@ -681,7 +698,7 @@ func cmdDoctor(args []string) {
 			abs = d
 		}
 		if info, err := os.Stat(abs); err == nil && info.IsDir() {
-			fmt.Println(t.Success("  " + abs))
+			fmt.Println(t.Success(abs))
 		} else {
 			fmt.Println(t.Dim("  " + abs + " (not found, skipped)"))
 		}
@@ -705,10 +722,10 @@ func cmdDoctor(args []string) {
 		ok = false
 	}
 	for _, p := range found {
-		fmt.Println(t.Success(fmt.Sprintf("  %s (%s) v%s", p.Manifest.Name, p.Manifest.Kind, p.Manifest.Version)))
+		fmt.Println(t.Success(fmt.Sprintf("%s (%s) v%s", p.Manifest.Name, p.Manifest.Kind, p.Manifest.Version)))
 	}
 	for _, issue := range issues {
-		fmt.Println(t.Failure(fmt.Sprintf("  %s: %v", issue.Path, issue.Err)))
+		fmt.Println(t.Failure(fmt.Sprintf("%s: %v", issue.Path, issue.Err)))
 		ok = false
 	}
 
@@ -722,11 +739,160 @@ func cmdDoctor(args []string) {
 	exit(1)
 }
 
+// statusUsage prints the usage/help text for `lumo status`.
+func statusUsage() {
+	fmt.Fprintln(os.Stderr, `usage: lumo status [flags]
+
+Shows the current repo/project, whether Git is initialized, and whether
+GitHub and SonarQube are reachable/configured.`)
+}
+
+// cmdStatus reports the current project/Git/GitHub/SonarQube state.
+// --offline skips every network call (GitHub's `gh auth status`, the
+// SonarQube HTTP check, and the govulncheck dependency-vulnerability
+// scan, which fetches the Go vulnerability database) as well as
+// secretstore.New() — the SonarQube token lookup is part of the network
+// path, not the offline one — so `lumo status --offline` never touches
+// the network or the OS secret store. Network calls are announced on
+// stderr (not stdout) so piped or parsed stdout output stays clean.
+func cmdStatus(args []string) {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	fs.Usage = statusUsage
+	offline := fs.Bool("offline", false, "skip GitHub/SonarQube network checks")
+	verbose := fs.Bool("verbose", false, "print phase-by-phase connector logging to stderr")
+	fs.BoolVar(verbose, "v", false, "shorthand for -verbose")
+	fs.Parse(args)
+
+	cfg, _ := prompt.LoadConfig()
+	themeName := prompt.ResolveThemeName("", cfg.Theme)
+	t := prompt.GetTheme(themeName, os.Getenv("NO_COLOR") != "")
+
+	var logger diag.Logger = diag.NoopLogger{}
+	if *verbose {
+		logger = diag.WriterLogger{W: os.Stderr}
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	projectName := filepath.Base(cwd)
+	fmt.Println(t.Header("Project:"))
+	fmt.Println(t.Success(fmt.Sprintf("%s (%s)", projectName, cwd)))
+	fmt.Println()
+
+	fmt.Println(t.Header("Git:"))
+	gitCmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+	gitCmd.Dir = cwd
+	if out, gitErr := gitCmd.Output(); gitErr == nil && strings.TrimSpace(string(out)) == "true" {
+		fmt.Println(t.Success("initialized"))
+	} else {
+		fmt.Println(t.Failure("not initialized"))
+	}
+	fmt.Println()
+
+	fmt.Println(t.Header("GitHub:"))
+	if *offline {
+		fmt.Println(t.Dim("offline — not checked"))
+	} else {
+		fmt.Fprintln(os.Stderr, "→ network: GitHub API (gh auth status)")
+		gh := connector.NewGitHubConnector(connector.ExecCmdRunner{})
+		res, err := connector.RunEngine(gh, logger)
+		printConnectorResult(t, res, err)
+	}
+	fmt.Println()
+
+	fmt.Println(t.Header("SonarQube:"))
+	switch {
+	case *offline:
+		fmt.Println(t.Dim("offline — not checked"))
+	case cfg.SonarQubeURL == "":
+		fmt.Println(t.Dim("not configured (see 'lumo config set sonarqube-url')"))
+	default:
+		store, native, storeErr := secretstore.New()
+		if storeErr != nil {
+			fmt.Println(t.Failure("error reading token: " + storeErr.Error()))
+			break
+		}
+		if !native {
+			fmt.Fprintln(os.Stderr, "warning: SonarQube token is stored in an unencrypted local file (no OS secret store available)")
+		}
+		token, found, getErr := store.Get("sonarqube-token")
+		if getErr != nil {
+			fmt.Println(t.Failure("error reading token: " + getErr.Error()))
+			break
+		}
+		if !found {
+			fmt.Println(t.Dim("not configured (see 'lumo config set sonarqube-token')"))
+			break
+		}
+		fmt.Fprintln(os.Stderr, "→ network: SonarQube ("+cfg.SonarQubeURL+"/api/system/status)")
+		sq := connector.NewSonarQubeConnector(cfg.SonarQubeURL, token, nil)
+		res, err := connector.RunEngine(sq, logger)
+		printConnectorResult(t, res, err)
+	}
+
+	fmt.Println()
+	fmt.Println(t.Header("Dependency vulnerabilities (Go):"))
+	switch {
+	case *offline:
+		fmt.Println(t.Dim("offline — not checked"))
+	default:
+		if _, statErr := os.Stat(filepath.Join(cwd, "go.mod")); statErr != nil {
+			fmt.Println(t.Dim("skipped (no go.mod in current directory)"))
+		} else if _, lookErr := exec.LookPath("go"); lookErr != nil {
+			fmt.Println(t.Dim("skipped (go toolchain not found on PATH)"))
+		} else {
+			fmt.Fprintln(os.Stderr, "→ network: Go vulnerability database (govulncheck)")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, "go", "run", "golang.org/x/vuln/cmd/govulncheck@latest", "./...").CombinedOutput()
+			switch {
+			case err != nil && !strings.Contains(string(out), "vulnerabilities"):
+				fmt.Println(t.Dim("skipped (govulncheck unavailable: " + firstLine(string(out)) + ")"))
+			case strings.Contains(string(out), "No vulnerabilities found"), strings.Contains(string(out), "0 vulnerabilities"):
+				fmt.Println(t.Success("no known vulnerabilities"))
+			default:
+				fmt.Println(t.Failure("vulnerabilities found — run 'go run golang.org/x/vuln/cmd/govulncheck@latest ./...' for details"))
+			}
+		}
+	}
+}
+
+// printConnectorResult renders a connector's phase-engine outcome: a
+// PhaseError (or any other error) as a failure line naming what went
+// wrong, otherwise the result's own Connected/Detail.
+func printConnectorResult(t prompt.Theme, res connector.Result, err error) {
+	if err != nil {
+		fmt.Println(t.Failure(err.Error()))
+		return
+	}
+	if res.Connected {
+		fmt.Println(t.Success(res.Detail))
+	} else {
+		fmt.Println(t.Failure(res.Detail))
+	}
+}
+
+// firstLine returns the text up to (not including) the first newline in
+// s, or all of s if it has no newline. Used to keep a subprocess's
+// (potentially multi-line) error output to a single summary line.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
 func configUsage() {
 	fmt.Fprintln(os.Stderr, `usage: lumo config get theme
        lumo config set theme <default|minimal>
        lumo config get projects-dir
-       lumo config set projects-dir <path>`)
+       lumo config set projects-dir <path>
+       lumo config get sonarqube-url
+       lumo config set sonarqube-url <url>
+       lumo config set sonarqube-token   (interactive prompt; never accepts the token as an argument)`)
 }
 
 func cmdConfig(args []string) {
@@ -748,6 +914,18 @@ func cmdConfig(args []string) {
 		} else {
 			cmdConfigSetProjectsDir(args[2:])
 		}
+	case "sonarqube-url":
+		if action == "get" {
+			cmdConfigGetSonarQubeURL()
+		} else {
+			cmdConfigSetSonarQubeURL(args[2:])
+		}
+	case "sonarqube-token":
+		if action == "get" {
+			fmt.Fprintln(os.Stderr, "error: sonarqube-token cannot be read back (write-only; use 'lumo status' to check it's configured)")
+			exit(2)
+		}
+		cmdConfigSetSonarQubeToken()
 	default:
 		configUsage()
 		exit(1)
@@ -809,6 +987,139 @@ func cmdConfigSetProjectsDir(rest []string) {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		exit(1)
 	}
+}
+
+func cmdConfigGetSonarQubeURL() {
+	cfg, err := prompt.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	fmt.Println(cfg.SonarQubeURL)
+}
+
+func cmdConfigSetSonarQubeURL(rest []string) {
+	if len(rest) < 1 || rest[0] == "" {
+		configUsage()
+		exit(1)
+	}
+	cfg, err := prompt.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	cfg.SonarQubeURL = rest[0]
+	if err := prompt.SaveConfig(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+}
+
+// cmdConfigSetSonarQubeToken reads the token interactively (never as a
+// CLI argument, to avoid shell-history/process-list leakage — spec
+// Section 2.1) and stores it via secretstore, warning if the OS has no
+// native secret store reachable and Lumo is falling back to an
+// unencrypted local file.
+func cmdConfigSetSonarQubeToken() {
+	fmt.Print("SonarQube token: ")
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	token := strings.TrimSpace(line)
+	if token == "" {
+		fmt.Fprintln(os.Stderr, "error: token cannot be empty")
+		exit(1)
+	}
+
+	store, native, err := secretstore.New()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	if !native {
+		fmt.Fprintln(os.Stderr, "warning: no OS secret store available — the token will be stored in a local file, unencrypted at rest")
+	}
+	if err := store.Set("sonarqube-token", token); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	fmt.Println("SonarQube token saved.")
+}
+
+// pluginTrustKey identifies a specific plugin build for consent tracking:
+// name+version+resolved path, so a plugin relocated to a different path,
+// or bumped to a new version, requires consent again; swapping the
+// binary at the same path with the same declared name/version is not
+// detected by this key alone — see SECURITY.md's "installing a plugin is
+// consent to run it" model and spec Section 2.2.
+func pluginTrustKey(p registry.Plugin) string {
+	return p.Manifest.Name + "@" + p.Manifest.Version + "@" + p.EntrypointPath
+}
+
+func isApproved(cfg prompt.Config, key string) bool {
+	for _, k := range cfg.ApprovedPlugins {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
+// confirmPluginTrust resolves every plugin a.ProjectType/Language/
+// Framework/Capabilities will run and, for any not already approved,
+// prompts for confirmation (skipped entirely when yes is true — the
+// existing non-interactive contract for --answers/CI runs, ADR-0007).
+// Approvals are persisted to prompt.Config.ApprovedPlugins so the same
+// plugin version+path never re-prompts.
+func confirmPluginTrust(reg *registry.Registry, a config.Answers, yes bool) error {
+	if yes {
+		return nil
+	}
+
+	var toConfirm []registry.Plugin
+	tmpl, err := reg.ResolveTemplate(a.ProjectType, a.Language, a.Framework)
+	if err != nil {
+		return err
+	}
+	toConfirm = append(toConfirm, tmpl)
+	for _, capID := range a.Capabilities {
+		capPlugin, err := reg.ResolveCapability(capID)
+		if err != nil {
+			return err
+		}
+		toConfirm = append(toConfirm, capPlugin)
+	}
+
+	cfg, err := prompt.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	changed := false
+	for _, p := range toConfirm {
+		key := pluginTrustKey(p)
+		if isApproved(cfg, key) {
+			continue
+		}
+		fmt.Printf("About to run plugin %q v%s (%s). Continue? [y/N] ", p.Manifest.Name, p.Manifest.Version, p.EntrypointPath)
+		line, _ := reader.ReadString('\n')
+		answer := strings.ToLower(strings.TrimSpace(line))
+		if answer != "y" && answer != "yes" {
+			return fmt.Errorf("declined to run plugin %q", p.Manifest.Name)
+		}
+		cfg.ApprovedPlugins = append(cfg.ApprovedPlugins, key)
+		changed = true
+	}
+	if changed {
+		if err := prompt.SaveConfig(cfg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isValidThemeName(name string) bool {
