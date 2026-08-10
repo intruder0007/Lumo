@@ -33,8 +33,8 @@ type Model struct {
 	LastScanned        time.Time
 }
 
-// hasConfig reports whether name is in m.ConfigFilesPresent.
-func (m Model) hasConfig(name string) bool {
+// HasConfig reports whether name is in m.ConfigFilesPresent.
+func (m Model) HasConfig(name string) bool {
 	for _, c := range m.ConfigFilesPresent {
 		if c == name {
 			return true
@@ -74,19 +74,19 @@ func (Detector) Scan(root string) (Model, error) {
 		}
 	}
 
-	if m.hasConfig("go.mod") {
+	if m.HasConfig("go.mod") {
 		m.Languages = append(m.Languages, "go")
 		if v, ok := goModVersion(filepath.Join(root, "go.mod")); ok {
 			m.DeclaredToolchain["go"] = v
 		}
 	}
-	if m.hasConfig("package.json") {
+	if m.HasConfig("package.json") {
 		m.Languages = append(m.Languages, "javascript")
 		if v, ok := packageJSONNodeEngine(filepath.Join(root, "package.json")); ok {
 			m.DeclaredToolchain["node"] = v
 		}
 	}
-	if m.hasConfig("go.work") {
+	if m.HasConfig("go.work") {
 		m.IsMonorepo = true
 	}
 
