@@ -20,6 +20,8 @@ import (
 	"github.com/intruder0007/Lumo/core/config"
 	"github.com/intruder0007/Lumo/core/connector"
 	"github.com/intruder0007/Lumo/core/diag"
+	"github.com/intruder0007/Lumo/core/domains/sourcecontrol"
+	"github.com/intruder0007/Lumo/core/domains/workspaceintel"
 	"github.com/intruder0007/Lumo/core/engine"
 	"github.com/intruder0007/Lumo/core/plugin"
 	"github.com/intruder0007/Lumo/core/registry"
@@ -746,10 +748,19 @@ func cmdStatus(args []string) {
 	fmt.Println()
 
 	fmt.Println(t.Header("Git:"))
-	gitCmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
-	gitCmd.Dir = cwd
-	if out, gitErr := gitCmd.Output(); gitErr == nil && strings.TrimSpace(string(out)) == "true" {
-		fmt.Println(t.Success("initialized"))
+	// Whether .git exists is a Workspace Intelligence fact; branch/dirty
+	// state is Source Control's — see docs/architecture/domains/
+	// source-control.md, "Source Control assumes a repo exists once
+	// invoked."
+	wsModel, _ := workspaceintel.NewDetector().Scan(cwd)
+	if !wsModel.HasConfig(".git") {
+		fmt.Println(t.Failure("not initialized"))
+	} else if scmModel, scmErr := sourcecontrol.NewProvider(cwd).Status(); scmErr == nil {
+		detail := fmt.Sprintf("initialized (branch: %s)", scmModel.Branch)
+		if scmModel.Dirty {
+			detail = fmt.Sprintf("initialized (branch: %s, dirty)", scmModel.Branch)
+		}
+		fmt.Println(t.Success(detail))
 	} else {
 		fmt.Println(t.Failure("not initialized"))
 	}
