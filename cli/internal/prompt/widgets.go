@@ -399,23 +399,31 @@ func textInput(o *Output, r io.Reader, t Theme, label, placeholder, initial stri
 		if err != nil {
 			return "", err
 		}
-		switch k {
-		case keyEnter:
+		// readKeyByte classifies j/k/g/G/q/space as menu-navigation keys
+		// (keyDown/keyUp/keyHome/keyEnd/keyCancel/keySpace) for
+		// selectMenu's benefit. A free-text field has no such menu, so
+		// every one of those bytes must still be typeable literally —
+		// checking the byte value first (not the logical key) is what
+		// makes that possible; b's printable range (32-126) can never
+		// overlap with Enter (\r/\n), Ctrl+C (3), Esc (27), or backspace/
+		// delete (8/127), so this can't misfire on real control keys.
+		// The one ambiguous case is b==27: a bare Esc and an arrow/Home/
+		// End escape sequence both report it, so that branch still
+		// checks k==keyCancel to tell a real Esc apart from a navigation
+		// sequence (which stays a harmless no-op here, same as before).
+		switch {
+		case k == keyEnter:
 			return string(buf), nil
-		case keyCancel:
-			if b == 3 { // real Ctrl+C
-				return "", ErrCancelled
+		case k == keyCancel && b == 3: // real Ctrl+C
+			return "", ErrCancelled
+		case k == keyCancel && b == 27: // bare Esc: clear first, then back
+			if len(buf) > 0 {
+				buf = buf[:0]
+				draw()
+				continue
 			}
-			if b == 27 { // Esc: clear first, then back
-				if len(buf) > 0 {
-					buf = buf[:0]
-					draw()
-					continue
-				}
-				return "", ErrBack
-			}
-			// 'q' is just a character in an input field.
-		case keyOther:
+			return "", ErrBack
+		default:
 			switch {
 			case b == 127 || b == 8: // backspace/delete
 				if len(buf) > 0 {
