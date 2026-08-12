@@ -1160,6 +1160,32 @@ func TestStatusOfflineShowsRepoAndGitOnly(t *testing.T) {
 	}
 }
 
+// TestTuiRequiresInteractiveTerminal builds the real lumo binary and
+// runs `lumo tui` with stdin/stdout not connected to a terminal (the
+// default for exec.Command, matching how any CI runner or piped
+// invocation looks). The persistent shell has no line-based fallback
+// the way the wizard does — it must refuse cleanly rather than try to
+// run a redraw-in-place loop against a non-terminal.
+func TestTuiRequiresInteractiveTerminal(t *testing.T) {
+	root := repoRoot(t)
+	bin := t.TempDir()
+	cliPath := filepath.Join(bin, exeName("lumo"))
+	buildBinary(t, root, "cli", cliPath)
+
+	dir := t.TempDir()
+	configDir := t.TempDir()
+	cmd := exec.Command(cliPath, "tui")
+	cmd.Dir = dir
+	cmd.Env = isolatedConfigEnv(configDir)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("lumo tui with no terminal should fail, got exit 0:\n%s", out)
+	}
+	if !strings.Contains(string(out), "requires an interactive terminal") {
+		t.Errorf("output = %q, want it to mention requiring an interactive terminal", out)
+	}
+}
+
 // TestStatusSkipsVulnRowOutsideGoProject builds the real lumo binary and
 // runs `lumo status --offline` in a fresh temp directory with no go.mod,
 // proving the "Dependency vulnerabilities (Go):" row reports offline

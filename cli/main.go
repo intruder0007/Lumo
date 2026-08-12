@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -17,14 +18,19 @@ import (
 
 	"github.com/intruder0007/Lumo/cli/internal/embedded"
 	"github.com/intruder0007/Lumo/cli/internal/prompt"
+	"github.com/intruder0007/Lumo/cli/internal/shell"
 	"github.com/intruder0007/Lumo/core/config"
 	"github.com/intruder0007/Lumo/core/connector"
 	"github.com/intruder0007/Lumo/core/diag"
+	"github.com/intruder0007/Lumo/core/domains/sourcecontrol"
+	"github.com/intruder0007/Lumo/core/domains/workspaceintel"
 	"github.com/intruder0007/Lumo/core/engine"
+	"github.com/intruder0007/Lumo/core/kernel"
 	"github.com/intruder0007/Lumo/core/plugin"
 	"github.com/intruder0007/Lumo/core/registry"
 	"github.com/intruder0007/Lumo/core/secretstore"
 	sdk "github.com/intruder0007/Lumo/sdk/go/sdk"
+	"golang.org/x/term"
 )
 
 // version is overridden at build time via:
@@ -65,6 +71,8 @@ func main() {
 		cmdDoctor(os.Args[2:])
 	case "status":
 		cmdStatus(os.Args[2:])
+	case "tui":
+		cmdTui(os.Args[2:])
 	case "version":
 		fmt.Printf("lumo version %s (%s, %s/%s)\n", version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	case "-h", "--help", "help":
@@ -746,10 +754,19 @@ func cmdStatus(args []string) {
 	fmt.Println()
 
 	fmt.Println(t.Header("Git:"))
-	gitCmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
-	gitCmd.Dir = cwd
-	if out, gitErr := gitCmd.Output(); gitErr == nil && strings.TrimSpace(string(out)) == "true" {
-		fmt.Println(t.Success("initialized"))
+	// Whether .git exists is a Workspace Intelligence fact; branch/dirty
+	// state is Source Control's — see docs/architecture/domains/
+	// source-control.md, "Source Control assumes a repo exists once
+	// invoked."
+	wsModel, _ := workspaceintel.NewDetector().Scan(cwd)
+	if !wsModel.HasConfig(".git") {
+		fmt.Println(t.Failure("not initialized"))
+	} else if scmModel, scmErr := sourcecontrol.NewProvider(cwd).Status(); scmErr == nil {
+		detail := fmt.Sprintf("initialized (branch: %s)", scmModel.Branch)
+		if scmModel.Dirty {
+			detail = fmt.Sprintf("initialized (branch: %s, dirty)", scmModel.Branch)
+		}
+		fmt.Println(t.Success(detail))
 	} else {
 		fmt.Println(t.Failure("not initialized"))
 	}
@@ -821,6 +838,102 @@ func cmdStatus(args []string) {
 			}
 		}
 	}
+}
+
+// tuiUsage prints the usage/help text for `lumo tui`.
+func tuiUsage() {
+	fmt.Fprintln(os.Stderr, `usage: lumo tui
+
+Opens the persistent platform shell: a spine of all eight domains
+(Workspace, Generate, Source Control, Security, Quality, Dev
+Environment, Automation, About), one focused at a time. Requires a
+real interactive terminal — there is no non-interactive fallback,
+unlike 'lumo new'.`)
+}
+
+// cmdTui runs the persistent platform shell (docs/architecture/domains/
+// tui.md, Phase B4). It requires a real terminal on both stdin and
+// stdout — a multi-panel, redraw-in-place shell has no meaningful
+// degraded mode the way the wizard's line-fallback does for a single
+// linear flow, so it refuses cleanly instead of pretending to work.
+func cmdTui(args []string) {
+	fs := flag.NewFlagSet("tui", flag.ExitOnError)
+	fs.Usage = tuiUsage
+	fs.Parse(args)
+
+	stdinFd := int(os.Stdin.Fd())
+	stdoutFd := int(os.Stdout.Fd())
+	if !term.IsTerminal(stdinFd) || !term.IsTerminal(stdoutFd) {
+		fmt.Fprintln(os.Stderr, "error: lumo tui requires an interactive terminal")
+		exit(1)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+
+	sh := shell.NewLiveShell(cwd, kernel.NewSessionStore(), pluginDirs())
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+
+	raw, err := prompt.EnterRaw(stdinFd)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		exit(1)
+	}
+	defer raw.Close()
+	go func() {
+		if _, ok := <-sigCh; ok {
+			raw.Close()
+			fmt.Print(tuiClearScreen)
+			os.Exit(130)
+		}
+	}()
+
+	renderTui(sh)
+	r := bufio.NewReader(os.Stdin)
+loop:
+	for {
+		k, b, err := prompt.ReadKeyByte(r)
+		if err != nil {
+			break
+		}
+		switch {
+		case k == prompt.RawKeyCancel && (b == 3 || b == 27): // Ctrl+C or bare Esc
+			break loop
+		case b == 'q':
+			break loop
+		case k == prompt.RawKeyLeft:
+			sh.Prev()
+			renderTui(sh)
+		case k == prompt.RawKeyRight:
+			sh.Next()
+			renderTui(sh)
+		case b >= '1' && b <= '8':
+			if domain, ok := sh.DomainAt(int(b - '1')); ok {
+				_ = sh.Focus(domain)
+				renderTui(sh)
+			}
+		}
+	}
+	fmt.Print(tuiClearScreen)
+}
+
+// tuiClearScreen clears the terminal and homes the cursor, so each
+// redraw replaces the previous one instead of scrolling.
+const tuiClearScreen = "\x1b[2J\x1b[H"
+
+// renderTui draws one frame of the shell: the spine + focused panel,
+// then the key hint line.
+func renderTui(sh *shell.Shell) {
+	fmt.Print(tuiClearScreen)
+	fmt.Println(sh.Render())
+	fmt.Println()
+	fmt.Println("← → navigate panels · 1-8 jump to a panel · q quit")
 }
 
 // printConnectorResult renders a connector's phase-engine outcome: a

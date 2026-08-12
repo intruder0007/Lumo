@@ -145,6 +145,30 @@ func readKey(r io.Reader) (key, error) {
 	return k, err
 }
 
+// RawKey, its constants, and ReadKeyByte let a caller outside this
+// package (e.g. `lumo tui`'s panel-navigation loop) reuse the same
+// escape-sequence-aware key classification as the wizard's widgets,
+// instead of duplicating readKeyByte's arrow-key/vim-key parsing. Named
+// RawKey, not Key, because Key (components.go) already names the
+// unrelated key-hint display struct used by KeyHints.
+type RawKey = key
+
+const (
+	RawKeyUp     = keyUp
+	RawKeyDown   = keyDown
+	RawKeyLeft   = keyLeft
+	RawKeyRight  = keyRight
+	RawKeyHome   = keyHome
+	RawKeyEnd    = keyEnd
+	RawKeyEnter  = keyEnter
+	RawKeySpace  = keySpace
+	RawKeyCancel = keyCancel
+	RawKeyOther  = keyOther
+)
+
+// ReadKeyByte is the exported form of readKeyByte.
+func ReadKeyByte(r io.Reader) (RawKey, byte, error) { return readKeyByte(r) }
+
 // RawMode manages terminal raw mode for the duration of an interactive
 // session, restoring the original state on Close (idempotent, safe on
 // panic).
