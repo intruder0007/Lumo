@@ -97,6 +97,18 @@ func (s *Shell) RegisterPanel(domain kernel.DomainID, panel Panel) {
 	}
 }
 
+// DomainAt returns the domain registered at spine position index
+// (0-based, registration order). ok is false if index is out of range —
+// used for the shell's digit-key jump (per the interaction survey's
+// persistent-spine direction, each domain's spine position is a stable,
+// numbered target).
+func (s *Shell) DomainAt(index int) (domain kernel.DomainID, ok bool) {
+	if index < 0 || index >= len(s.entries) {
+		return "", false
+	}
+	return s.entries[index].id, true
+}
+
 // Focus switches the focused panel to domain. It returns
 // *UnknownPanelError if no panel is registered under domain.
 func (s *Shell) Focus(domain kernel.DomainID) error {
