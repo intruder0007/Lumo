@@ -79,6 +79,15 @@ func (Detector) Scan(root string) (Model, error) {
 		if v, ok := goModVersion(filepath.Join(root, "go.mod")); ok {
 			m.DeclaredToolchain["go"] = v
 		}
+	} else if m.HasConfig("go.work") {
+		// A go.work-only root (no root go.mod — each member module has
+		// its own, e.g. this repo) is still a Go project. go.work uses
+		// the same "go X.Y" directive syntax as go.mod, so goModVersion
+		// parses it too.
+		m.Languages = append(m.Languages, "go")
+		if v, ok := goModVersion(filepath.Join(root, "go.work")); ok {
+			m.DeclaredToolchain["go"] = v
+		}
 	}
 	if m.HasConfig("package.json") {
 		m.Languages = append(m.Languages, "javascript")

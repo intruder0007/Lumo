@@ -78,6 +78,42 @@ func TestScan_PackageJSONWithoutEnginesFieldIsNotAnError(t *testing.T) {
 	}
 }
 
+func TestScan_GoWorkOnlyRootDetectsGoLanguageAndVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "go.work", "go 1.25.0\n\nuse (\n\t./cli\n\t./core\n)\n")
+
+	m, err := NewDetector().Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if !contains(m.Languages, "go") {
+		t.Errorf("Languages = %v, want to include \"go\" for a go.work-only root (no root go.mod)", m.Languages)
+	}
+	if got := m.DeclaredToolchain["go"]; got != "1.25.0" {
+		t.Errorf("DeclaredToolchain[\"go\"] = %q, want \"1.25.0\" parsed from go.work", got)
+	}
+}
+
+func TestScan_GoModAndGoWorkTogetherDoNotDuplicateGoLanguage(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "go.mod", "module example.com/foo\n\ngo 1.25.0\n")
+	writeFile(t, dir, "go.work", "go 1.25.0\n\nuse (\n\t.\n)\n")
+
+	m, err := NewDetector().Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	count := 0
+	for _, l := range m.Languages {
+		if l == "go" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("Languages = %v, want exactly one \"go\" entry when both go.mod and go.work are present", m.Languages)
+	}
+}
+
 func TestScan_GoWorkMarksMonorepo(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "go.work", "go 1.25.0\n\nuse (\n\t./cli\n\t./core\n)\n")
